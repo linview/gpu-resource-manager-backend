@@ -1,0 +1,36 @@
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+hardware:
+  mock_delay_ms: 1000
+  default_gpu_specs:
+    - model: "NVIDIA A100"
+      memory_gb: 80
+      driver_version: "525.85.05"
+      cuda_version: "12.0"
+      count: 4
+    - model: "NVIDIA V100"
+      memory_gb: 32
+      driver_version: "525.85.05"
+      cuda_version: "11.8"
+      count: 8
+    - model: "NVIDIA RTX 4090"
+      memory_gb: 24
+      driver_version: "525.85.05"
+      cuda_version: "12.0"
+      count: 2
+    - model: "NVIDIA H100"
+      memory_gb: 80
+      driver_version: "525.85.05"
+      cuda_version: "12.0"
+      count: 2
+    - model: "NVIDIA RTX 3090"
+      memory_gb: 24
+      driver_version: "525.85.05"
+      cuda_version: "11.8"
+      count: 4
+
+workflow:
+  default_timeout_seconds: 300
+  step_delay_ms: 2000

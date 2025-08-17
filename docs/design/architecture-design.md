@@ -1,28 +1,69 @@
-# GPU资源管理系统架构设计 (MVP版本)
+>>> Upated at 2025-08-17 23:00:00 <<<
+# GPU资源管理系统架构设计 (修正版本 - 事件驱动架构)
+
+## 文档信息
+- **项目名称**: GPU资源管理后台系统
+- **版本**: v2.0 (修正版本 - 事件驱动架构)
+- **创建日期**: 2025-08-16
+- **最后更新**: 2025-08-17 23:00:00
+- **负责人**: Architect
+- **状态**: 基于评审结果修正完成
 
 ## 1. 系统架构概览
 
-### 技术栈 (基于JD要求)
+### 1.1 架构设计理念
+采用**模式A: IaaS作为资源编排层**的架构设计：
+- **User → IaaS → K8s → Tinkerbell → Hardware**
+- IaaS作为资源编排层，专注于业务逻辑
+- K8s作为容器编排平台
+- Tinkerbell作为硬件管理核心
+
+### 1.2 技术栈 (基于JD要求)
 - **主要语言**: Golang (核心微服务)
 - **辅助语言**: Python (工具开发)
 - **Web框架**: Echo 或 Fiber
+- **容器编排**: Kubernetes (k0s)
 - **硬件管理**: Tinkerbell v0.12.2
+- **操作系统**: Talos Linux
+- **配置管理**: Cloud-init
 - **数据存储**: PostgreSQL + Redis + InfluxDB
-- **消息队列**: NATS JetStream
+- **消息队列**: NATS JetStream (MVP) / Kafka (生产环境)
 - **API接口**: REST (MVP) + gRPC/GraphQL (P1)
 - **测试框架**: Testcontainers-Go + k8s
 
-### 架构模式 (MVP版本)
+### 1.3 架构模式 (修正版本)
 ```
-Tinkerbell (裸金属provisioning)
-    ↓
-自研GPU管理服务 (Golang)
-    ↓
-自研调度服务 (Golang)
-    ↓
-CMDB服务 (Golang)
-    ↓
-Python工具和脚本
+┌─────────────────────────────────────────────────────────────┐
+│                   应用层 (Application Layer)                │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │  用户界面   │ │  API网关    │ │  IaaS服务   │           │
+│  │             │ │             │ │             │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
+                                │
+┌─────────────────────────────────────────────────────────────┐
+│                  编排层 (Orchestration Layer)               │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │ Kubernetes  │ │ Tinkerbell  │ │   CRD资源   │           │
+│  │   (k0s)     │ │             │ │             │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
+                                │
+┌─────────────────────────────────────────────────────────────┐
+│                  硬件层 (Hardware Layer)                    │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │   IPMI      │ │  Redfish    │ │   gNMI      │           │
+│  │   协议      │ │   协议      │ │   协议      │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
+                                │
+┌─────────────────────────────────────────────────────────────┐
+│               基础设施层 (Infrastructure Layer)             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │ Talos Linux │ │    k0s      │ │ Cloud-init  │           │
+│  │             │ │   集群      │ │             │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## 2. 实体关系图 (ERD) - 详细设计
@@ -91,6 +132,41 @@ erDiagram
         timestamp created_at "创建时间"
     }
     
+    %% Tinkerbell CRD映射实体
+    HardwareCRD {
+        string id PK "UUID"
+        string tinkerbell_id "Tinkerbell硬件ID"
+        string server_id FK "关联服务器ID"
+        json metadata "硬件元数据"
+        string status "状态"
+        timestamp created_at "创建时间"
+        timestamp updated_at "更新时间"
+    }
+    
+    TemplateCRD {
+        string id PK "UUID"
+        string tinkerbell_id "Tinkerbell模板ID"
+        string name "模板名称"
+        string description "模板描述"
+        string content "模板内容"
+        string version "版本"
+        string os_type "操作系统类型"
+        timestamp created_at "创建时间"
+        timestamp updated_at "更新时间"
+    }
+    
+    WorkflowCRD {
+        string id PK "UUID"
+        string tinkerbell_id "Tinkerbell工作流ID"
+        string hardware_id FK "关联硬件ID"
+        string template_id FK "关联模板ID"
+        string status "状态: pending|running|completed|failed"
+        json steps "工作流步骤"
+        timestamp started_at "开始时间"
+        timestamp completed_at "完成时间"
+        timestamp created_at "创建时间"
+    }
+    
     ServerConfig {
         string id PK "UUID"
         string server_id FK "服务器ID"
@@ -142,10 +218,13 @@ erDiagram
     Server ||--o{ GPU : "contains"
     Server ||--o{ Allocation : "allocated_to"
     Server ||--o{ ServerConfig : "has_config"
+    Server ||--|| HardwareCRD : "mapped_to"
     GPU ||--o{ GPUConfig : "has_config"
     Allocation ||--|| Workflow : "executes"
     Allocation }o--|| Server : "allocates"
     Allocation }o--|| User : "belongs_to"
+    HardwareCRD ||--o{ WorkflowCRD : "executes"
+    TemplateCRD ||--o{ WorkflowCRD : "used_by"
     Event }o--|| Server : "from_server"
     Event }o--|| GPU : "from_gpu"
     Event }o--|| Allocation : "from_allocation"
@@ -390,56 +469,75 @@ stateDiagram-v2
 
 ## 3. 核心流程时序图 - 基于API设计
 
-### 3.1 GPU资源分配流程
+### 3.1 GPU资源分配流程 (修正版本)
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant API as API Gateway
-    participant Provisioning as Provisioning Service
-    participant Operations as Operations Service
-    participant Tinkerbell as Tinkerbell Client
-    participant DB as Database
+    participant IaaS as IaaS Service
+    participant K8s as Kubernetes
+    participant Tinkerbell as Tinkerbell
+    participant Hardware as Hardware Layer
+    participant EventBus as NATS JetStream
     
-    U->>API: POST /api/v1/allocations
-    Note over U,API: {"user_id": "user123", "server_id": "server456", "purpose": "AI训练"}
+    U->>IaaS: POST /api/v1/allocations
+    Note over U,IaaS: {"user_id": "user123", "server_id": "server456", "purpose": "AI训练"}
     
-    API->>DB: 查询可用服务器
-    DB-->>API: 返回服务器列表
+    IaaS->>IaaS: 验证用户权限和配额
+    IaaS->>K8s: 创建Hardware CRD
+    K8s->>Tinkerbell: 硬件发现事件
+    Tinkerbell->>Hardware: 查询硬件信息
+    Hardware-->>Tinkerbell: 硬件详情
+    Tinkerbell-->>K8s: 更新Hardware CRD状态
     
-    API->>DB: 创建Allocation记录
-    Note over API,DB: status: "pending"
-    DB-->>API: 返回allocation_id
+    IaaS->>K8s: 创建Template CRD
+    K8s->>Tinkerbell: 模板创建事件
+    Tinkerbell-->>K8s: 模板创建完成
     
-    API->>Provisioning: 创建部署工作流
-    Provisioning->>Tinkerbell: POST /api/v1/workflows/deploy
-    Note over Provisioning,Tinkerbell: {"allocation_id": "alloc789", "server_id": "server456"}
-    Tinkerbell-->>Provisioning: 返回workflow_id
-    
-    Provisioning->>DB: 创建Workflow记录
-    Note over Provisioning,DB: {"allocation_id": "alloc789", "tinkerbell_id": "wf123", "status": "pending"}
-    
-    API-->>U: 202 Accepted
-    Note over API,U: {"allocation_id": "alloc789", "status": "pending"}
-    
-    Note over Tinkerbell: 异步部署流程
-    Tinkerbell->>Operations: 服务器电源控制
-    Operations->>Operations: POST /api/v1/operations/server456/power
-    Note over Operations: 开机操作
-    
+    IaaS->>K8s: 创建Workflow CRD
+    K8s->>Tinkerbell: 工作流执行事件
+    Tinkerbell->>Hardware: 电源控制
+    Hardware-->>Tinkerbell: 电源状态
     Tinkerbell->>Tinkerbell: PXE引导
-    Tinkerbell->>Tinkerbell: 安装操作系统
+    Tinkerbell->>Tinkerbell: 安装Talos Linux
+    Tinkerbell->>Tinkerbell: 安装k0s
     Tinkerbell->>Tinkerbell: 安装GPU驱动
     
-    Tinkerbell->>Provisioning: 部署完成通知
-    Provisioning->>DB: 更新Allocation状态
-    Note over Provisioning,DB: status: "active"
-    Provisioning->>DB: 更新Workflow状态
-    Note over Provisioning,DB: status: "completed"
+    Tinkerbell->>EventBus: 部署完成事件
+    EventBus->>IaaS: CMDB-Enricher处理
+    IaaS->>IaaS: 更新资源状态
+    IaaS-->>U: 分配完成通知
+```
+
+### 3.2 事件驱动架构流程
+
+```mermaid
+sequenceDiagram
+    participant Hardware as Hardware Layer
+    participant Tinkerbell as Tinkerbell
+    participant K8s as Kubernetes
+    participant EventBus as NATS JetStream
+    participant CMDB as CMDB-Enricher
+    participant Alert as Alert Correlation
+    participant IaaS as IaaS Service
     
-    Provisioning->>API: 部署完成事件
-    API->>U: 推送通知
-    Note over API,U: {"allocation_id": "alloc789", "status": "active"}
+    Hardware->>Tinkerbell: 硬件状态变化
+    Tinkerbell->>K8s: 更新Hardware CRD
+    K8s->>EventBus: 硬件事件
+    EventBus->>CMDB: 数据丰富处理
+    CMDB->>CMDB: 补充配置信息
+    CMDB->>CMDB: 验证数据一致性
+    CMDB->>IaaS: 更新CMDB数据
+    
+    Hardware->>Tinkerbell: 告警事件
+    Tinkerbell->>K8s: 更新状态
+    K8s->>EventBus: 告警事件
+    EventBus->>Alert: 告警关联分析
+    Alert->>Alert: 分析告警关联性
+    Alert->>Alert: 识别问题根因
+    Alert->>Alert: 生成处理建议
+    Alert->>IaaS: 发送关联结果
+    IaaS->>IaaS: 更新告警状态
 ```
 
 ### 3.2 GPU资源释放流程
@@ -597,6 +695,27 @@ type EventStreamService interface {
     SubscribeEvents(topic string, handler EventHandler) error
     GetEvents(filter *EventFilter) ([]*Event, error)
     ProcessAlertCorrelation(alert *Alert) (*CorrelationResult, error)
+}
+```
+
+### CMDB-Enricher Service
+
+```go
+type CMDBEnricherService interface {
+    HandleHardwareDiscovered(event *HardwareEvent) error
+    EnrichHardwareData(hardwareID string) error
+    ValidateConfiguration(config *HardwareConfig) (*ValidationResult, error)
+    UpdateCMDBData(hardwareID string, data *EnrichedData) error
+}
+```
+
+### Alert Correlation Service
+```go
+type AlertCorrelationService interface {
+    HandleAlert(alert *Alert) error
+    CorrelateAlerts(alerts []*Alert) (*CorrelationResult, error)
+    AnalyzeRootCause(correlation *CorrelationResult) (*RootCauseAnalysis, error)
+    GenerateRecommendation(analysis *RootCauseAnalysis) (*Recommendation, error)
 }
 ```
 

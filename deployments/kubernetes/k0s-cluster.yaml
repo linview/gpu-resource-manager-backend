@@ -1,0 +1,199 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-management
+  labels:
+    name: gpu-management
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gpu-management-sa
+  namespace: gpu-management
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gpu-management-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: gpu-management-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: gpu-management-role
+subjects:
+- kind: ServiceAccount
+  name: gpu-management-sa
+  namespace: gpu-management
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-management-config
+  namespace: gpu-management
+data:
+  config.yaml: |
+    server:
+      port: "8080"
+      host: "0.0.0.0"
+    
+    database:
+      host: "postgres-service"
+      port: 5432
+      user: "gpu_user"
+      password: "gpu_pass"
+      dbname: "gpu_management"
+      sslmode: "disable"
+    
+    redis:
+      host: "redis-service"
+      port: 6379
+      password: ""
+      db: 0
+    
+    nats:
+      url: "nats://nats-service:4222"
+    
+    tinkerbell:
+      url: "http://tinkerbell-service:50061"
+      username: "admin"
+      password: "password"
+    
+    k8s:
+      namespace: "gpu-management"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gpu-management-secrets
+  namespace: gpu-management
+type: Opaque
+data:
+  # Base64 encoded values
+  db-password: Z3B1X3Bhc3M=  # gpu_pass
+  redis-password: ""
+  tinkerbell-password: cGFzc3dvcmQ=  # password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-management-api
+  namespace: gpu-management
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gpu-management-api
+  template:
+    metadata:
+      labels:
+        app: gpu-management-api
+    spec:
+      serviceAccountName: gpu-management-sa
+      containers:
+      - name: gpu-management-api
+        image: palebluedot-backend:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: SERVER_PORT
+          value: "8080"
+        - name: DB_HOST
+          value: "postgres-service"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: "gpu_user"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: gpu-management-secrets
+              key: db-password
+        - name: DB_NAME
+          value: "gpu_management"
+        - name: REDIS_HOST
+          value: "redis-service"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: NATS_URL
+          value: "nats://nats-service:4222"
+        - name: TINKERBELL_URL
+          value: "http://tinkerbell-service:50061"
+        - name: TINKERBELL_USERNAME
+          value: "admin"
+        - name: TINKERBELL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: gpu-management-secrets
+              key: tinkerbell-password
+        - name: K8S_NAMESPACE
+          value: "gpu-management"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-management-service
+  namespace: gpu-management
+spec:
+  selector:
+    app: gpu-management-api
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gpu-management-ingress
+  namespace: gpu-management
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: gpu-management.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: gpu-management-service
+            port:
+              number: 80

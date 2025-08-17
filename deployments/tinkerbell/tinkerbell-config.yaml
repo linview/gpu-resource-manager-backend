@@ -1,0 +1,328 @@
+# Tinkerbell 配置文件
+# 基于 Tinkerbell v0.12.2
+
+# Tinkerbell 服务配置
+tinkerbell:
+  # 服务端口
+  port: 50061
+  
+  # 数据库配置
+  database:
+    host: "postgres"
+    port: 5432
+    name: "tinkerbell"
+    user: "tinkerbell"
+    password: "tinkerbell_pass"
+    sslmode: "disable"
+  
+  # 日志配置
+  log:
+    level: "info"
+    format: "json"
+  
+  # 硬件管理配置
+  hardware:
+    # 硬件发现间隔
+    discovery_interval: "30s"
+    # 硬件超时时间
+    timeout: "5m"
+  
+  # 工作流配置
+  workflow:
+    # 工作流执行超时
+    timeout: "30m"
+    # 重试次数
+    retry_count: 3
+    # 重试间隔
+    retry_interval: "1m"
+
+# DHCP 服务配置
+dhcp:
+  # DHCP 服务端口
+  port: 67
+  # DHCP 服务接口
+  interface: "eth0"
+  # DHCP 地址池
+  address_pool:
+    start: "192.168.1.100"
+    end: "192.168.1.200"
+    gateway: "192.168.1.1"
+    netmask: "255.255.255.0"
+    dns_servers:
+      - "8.8.8.8"
+      - "8.8.4.4"
+
+# TFTP 服务配置
+tftp:
+  # TFTP 服务端口
+  port: 69
+  # TFTP 根目录
+  root: "/var/lib/tinkerbell/tftp"
+  # 允许的文件类型
+  allowed_extensions:
+    - "ipxe"
+    - "pxe"
+    - "bin"
+
+# 硬件管理协议配置
+hardware_protocols:
+  # IPMI 配置
+  ipmi:
+    enabled: true
+    timeout: "30s"
+    retry_count: 3
+  
+  # Redfish 配置
+  redfish:
+    enabled: true
+    timeout: "30s"
+    retry_count: 3
+    # Redfish 认证
+    auth:
+      username: "admin"
+      password: "password"
+  
+  # gNMI 配置
+  gnmi:
+    enabled: true
+    timeout: "30s"
+    retry_count: 3
+    # gNMI 认证
+    auth:
+      username: "admin"
+      password: "password"
+
+# 操作系统模板配置
+os_templates:
+  # Talos Linux 模板
+  talos_linux:
+    name: "talos-linux"
+    version: "v1.5.0"
+    url: "https://github.com/talos-systems/talos/releases/download/v1.5.0/metal-amd64.raw.xz"
+    checksum: "sha256:..."
+    install_script: |
+      #!/bin/bash
+      # Talos Linux 安装脚本
+      echo "Installing Talos Linux..."
+      
+      # 下载 Talos Linux
+      curl -L -o /tmp/talos.raw.xz ${TALOS_URL}
+      
+      # 验证校验和
+      echo "${TALOS_CHECKSUM} /tmp/talos.raw.xz" | sha256sum -c
+      
+      # 解压并写入磁盘
+      xz -d /tmp/talos.raw.xz
+      dd if=/tmp/talos.raw of=/dev/sda bs=4M
+      
+      # 配置网络
+      cat > /etc/network/interfaces << EOF
+      auto eth0
+      iface eth0 inet dhcp
+      EOF
+      
+      # 重启系统
+      reboot
+  
+  # Ubuntu 模板
+  ubuntu:
+    name: "ubuntu-server"
+    version: "22.04"
+    url: "http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/images/netboot/ubuntu-installer/amd64/linux"
+    initrd_url: "http://archive.ubuntu.com/ubuntu/dists/jammy/main/installer-amd64/current/images/netboot/ubuntu-installer/amd64/initrd.gz"
+    install_script: |
+      #!/bin/bash
+      # Ubuntu 安装脚本
+      echo "Installing Ubuntu Server..."
+      
+      # 使用 preseed 自动安装
+      cat > /tmp/preseed.cfg << EOF
+      # 语言和区域设置
+      d-i debian-installer/locale string en_US
+      d-i keyboard-configuration/xkb-keymap select us
+      d-i time/zone string UTC
+      
+      # 网络配置
+      d-i netcfg/choose_interface select auto
+      d-i netcfg/get_hostname string ubuntu-server
+      d-i netcfg/get_domain string local
+      
+      # 用户配置
+      d-i passwd/root-password-crypted password \$6\$...
+      d-i passwd/user-fullname string Ubuntu User
+      d-i passwd/username string ubuntu
+      d-i passwd/user-password-crypted password \$6\$...
+      d-i user-setup/allow-password-weak boolean true
+      
+      # 磁盘分区
+      d-i partman-auto/method string regular
+      d-i partman-auto/choose_recipe select atomic
+      d-i partman/confirm_write_new_label boolean true
+      d-i partman/choose_partition select finish
+      d-i partman/confirm boolean true
+      d-i partman/confirm_nooverwrite boolean true
+      
+      # 软件包选择
+      d-i pkgsel/update-policy select none
+      d-i pkgsel/include string openssh-server
+      d-i pkgsel/upgrade select full-upgrade
+      
+      # 引导加载程序
+      d-i grub-installer/only_debian boolean true
+      d-i grub-installer/with_other_os boolean true
+      d-i grub-installer/bootdev string /dev/sda
+      
+      # 完成安装
+      d-i finish-install/reboot_in_progress note
+      EOF
+      
+      # 启动安装程序
+      linux /install/vmlinuz auto=true url=http://${TINKERBELL_IP}/preseed.cfg
+      initrd /install/initrd.gz
+
+# GPU 驱动配置
+gpu_drivers:
+  # NVIDIA 驱动
+  nvidia:
+    enabled: true
+    version: "470.82.01"
+    url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/470.82.01/NVIDIA-Linux-x86_64-470.82.01.run"
+    checksum: "sha256:..."
+    install_script: |
+      #!/bin/bash
+      # NVIDIA 驱动安装脚本
+      echo "Installing NVIDIA Driver..."
+      
+      # 下载驱动
+      curl -L -o /tmp/nvidia.run ${NVIDIA_URL}
+      
+      # 验证校验和
+      echo "${NVIDIA_CHECKSUM} /tmp/nvidia.run" | sha256sum -c
+      
+      # 安装依赖
+      apt-get update
+      apt-get install -y build-essential dkms
+      
+      # 安装驱动
+      chmod +x /tmp/nvidia.run
+      /tmp/nvidia.run --silent --dkms
+      
+      # 安装 CUDA
+      curl -L -o /tmp/cuda.run https://developer.download.nvidia.com/compute/cuda/11.4.0/local_installers/cuda_11.4.0_470.42.01_linux.run
+      chmod +x /tmp/cuda.run
+      /tmp/cuda.run --silent --toolkit --samples
+  
+  # AMD 驱动
+  amd:
+    enabled: false
+    version: "latest"
+    install_script: |
+      #!/bin/bash
+      # AMD 驱动安装脚本
+      echo "Installing AMD Driver..."
+      
+      # 安装 ROCm
+      curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | apt-key add -
+      echo 'deb [arch=amd64] https://repo.radeon.com/rocm/apt/debian ubuntu main' > /etc/apt/sources.list.d/rocm.list
+      apt-get update
+      apt-get install -y rocm-dkms
+
+# 监控配置
+monitoring:
+  # Prometheus 配置
+  prometheus:
+    enabled: true
+    port: 9090
+    retention: "15d"
+  
+  # Grafana 配置
+  grafana:
+    enabled: true
+    port: 3000
+    admin_password: "admin"
+  
+  # 告警配置
+  alerts:
+    enabled: true
+    # GPU 温度告警
+    gpu_temperature:
+      threshold: 85
+      duration: "5m"
+    # GPU 利用率告警
+    gpu_utilization:
+      threshold: 95
+      duration: "10m"
+    # 内存使用告警
+    memory_usage:
+      threshold: 90
+      duration: "5m"
+
+# 网络配置
+network:
+  # 管理网络
+  management:
+    subnet: "192.168.1.0/24"
+    gateway: "192.168.1.1"
+    dns_servers:
+      - "8.8.8.8"
+      - "8.8.4.4"
+  
+  # 数据网络
+  data:
+    subnet: "10.0.0.0/24"
+    gateway: "10.0.0.1"
+  
+  # 存储网络
+  storage:
+    subnet: "172.16.0.0/24"
+    gateway: "172.16.0.1"
+
+# 存储配置
+storage:
+  # 本地存储
+  local:
+    enabled: true
+    path: "/var/lib/tinkerbell/storage"
+    size: "100Gi"
+  
+  # NFS 存储
+  nfs:
+    enabled: false
+    server: "nfs.example.com"
+    path: "/exports"
+    mount_options: "rw,sync,no_subtree_check"
+  
+  # Ceph 存储
+  ceph:
+    enabled: false
+    cluster_name: "ceph"
+    pool_name: "gpu-data"
+    user: "admin"
+    keyring: "/etc/ceph/ceph.client.admin.keyring"
+
+# 安全配置
+security:
+  # TLS 配置
+  tls:
+    enabled: true
+    cert_file: "/etc/tinkerbell/tls/server.crt"
+    key_file: "/etc/tinkerbell/tls/server.key"
+    ca_file: "/etc/tinkerbell/tls/ca.crt"
+  
+  # 认证配置
+  auth:
+    enabled: true
+    type: "jwt"
+    secret: "your-secret-key"
+    expiration: "24h"
+  
+  # 防火墙配置
+  firewall:
+    enabled: true
+    allowed_ports:
+      - 22    # SSH
+      - 80    # HTTP
+      - 443   # HTTPS
+      - 50061 # Tinkerbell API
+      - 67    # DHCP
+      - 69    # TFTP

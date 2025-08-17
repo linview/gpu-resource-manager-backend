@@ -1,0 +1,227 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:15
+    container_name: gpu-management-postgres
+    environment:
+      POSTGRES_DB: gpu_management
+      POSTGRES_USER: gpu_user
+      POSTGRES_PASSWORD: gpu_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - gpu-management-network
+    restart: unless-stopped
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: gpu-management-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - gpu-management-network
+    restart: unless-stopped
+
+  # InfluxDB 时序数据库
+  influxdb:
+    image: influxdb:2.7
+    container_name: gpu-management-influxdb
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin123
+      DOCKER_INFLUXDB_INIT_ORG: gpu-management
+      DOCKER_INFLUXDB_INIT_BUCKET: gpu-metrics
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - gpu-management-network
+    restart: unless-stopped
+
+  # NATS 消息队列
+  nats:
+    image: nats:2.9
+    container_name: gpu-management-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "-m", "8222"]
+    networks:
+      - gpu-management-network
+    restart: unless-stopped
+
+  # Tinkerbell 服务
+  tinkerbell:
+    image: tinkerbell/tinkerbell:v0.12.2
+    container_name: gpu-management-tinkerbell
+    environment:
+      TINKERBELL_PORT: 50061
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tinkerbell
+      DB_USER: tinkerbell
+      DB_PASSWORD: tinkerbell_pass
+      DB_SSLMODE: disable
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      HARDWARE_DISCOVERY_INTERVAL: 30s
+      HARDWARE_TIMEOUT: 5m
+      WORKFLOW_TIMEOUT: 30m
+      WORKFLOW_RETRY_COUNT: 3
+      WORKFLOW_RETRY_INTERVAL: 1m
+      DHCP_PORT: 67
+      DHCP_INTERFACE: eth0
+      TFTP_PORT: 69
+      TFTP_ROOT: /var/lib/tinkerbell/tftp
+    ports:
+      - "50061:50061"
+      - "67:67/udp"
+      - "69:69/udp"
+    volumes:
+      - tinkerbell_data:/var/lib/tinkerbell
+      - ./tinkerbell-config:/etc/tinkerbell/config.yaml
+    networks:
+      - gpu-management-network
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # GPU 管理 API 服务
+  gpu-management-api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: gpu-management-api
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: gpu_user
+      DB_PASSWORD: gpu_pass
+      DB_NAME: gpu_management
+      DB_SSLMODE: disable
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      NATS_URL: nats://nats:4222
+      TINKERBELL_URL: http://tinkerbell:50061
+      TINKERBELL_USERNAME: admin
+      TINKERBELL_PASSWORD: password
+      K8S_NAMESPACE: gpu-management
+      LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+    networks:
+      - gpu-management-network
+    depends_on:
+      - postgres
+      - redis
+      - nats
+      - tinkerbell
+    restart: unless-stopped
+
+  # Prometheus 监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: gpu-management-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - gpu-management-network
+    restart: unless-stopped
+
+  # Grafana 可视化
+  grafana:
+    image: grafana/grafana:latest
+    container_name: gpu-management-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - gpu-management-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Alertmanager 告警
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: gpu-management-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - gpu-management-network
+    restart: unless-stopped
+
+  # Nginx 反向代理
+  nginx:
+    image: nginx:alpine
+    container_name: gpu-management-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./ssl:/etc/nginx/ssl
+    networks:
+      - gpu-management-network
+    depends_on:
+      - gpu-management-api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  influxdb_data:
+    driver: local
+  tinkerbell_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+
+networks:
+  gpu-management-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

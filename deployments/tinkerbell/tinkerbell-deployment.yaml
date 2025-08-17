@@ -1,0 +1,448 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tinkerbell
+  labels:
+    name: tinkerbell
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tinkerbell-sa
+  namespace: tinkerbell
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tinkerbell-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets", "nodes"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tinkerbell-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tinkerbell-role
+subjects:
+- kind: ServiceAccount
+  name: tinkerbell-sa
+  namespace: tinkerbell
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tinkerbell-config
+  namespace: tinkerbell
+data:
+  config.yaml: |
+    tinkerbell:
+      port: 50061
+      database:
+        host: "postgres"
+        port: 5432
+        name: "tinkerbell"
+        user: "tinkerbell"
+        password: "tinkerbell_pass"
+        sslmode: "disable"
+      log:
+        level: "info"
+        format: "json"
+      hardware:
+        discovery_interval: "30s"
+        timeout: "5m"
+      workflow:
+        timeout: "30m"
+        retry_count: 3
+        retry_interval: "1m"
+    
+    dhcp:
+      port: 67
+      interface: "eth0"
+      address_pool:
+        start: "192.168.1.100"
+        end: "192.168.1.200"
+        gateway: "192.168.1.1"
+        netmask: "255.255.255.0"
+        dns_servers:
+          - "8.8.8.8"
+          - "8.8.4.4"
+    
+    tftp:
+      port: 69
+      root: "/var/lib/tinkerbell/tftp"
+      allowed_extensions:
+        - "ipxe"
+        - "pxe"
+        - "bin"
+    
+    hardware_protocols:
+      ipmi:
+        enabled: true
+        timeout: "30s"
+        retry_count: 3
+      redfish:
+        enabled: true
+        timeout: "30s"
+        retry_count: 3
+        auth:
+          username: "admin"
+          password: "password"
+      gnmi:
+        enabled: true
+        timeout: "30s"
+        retry_count: 3
+        auth:
+          username: "admin"
+          password: "password"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tinkerbell-secrets
+  namespace: tinkerbell
+type: Opaque
+data:
+  # Base64 encoded values
+  db-password: dGlua2VyYmVsbF9wYXNz  # tinkerbell_pass
+  redfish-password: cGFzc3dvcmQ=      # password
+  gnmi-password: cGFzc3dvcmQ=         # password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tinkerbell-server
+  namespace: tinkerbell
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tinkerbell-server
+  template:
+    metadata:
+      labels:
+        app: tinkerbell-server
+    spec:
+      serviceAccountName: tinkerbell-sa
+      containers:
+      - name: tinkerbell-server
+        image: tinkerbell/tinkerbell:v0.12.2
+        ports:
+        - containerPort: 50061
+          name: api
+        - containerPort: 67
+          name: dhcp
+        - containerPort: 69
+          name: tftp
+        env:
+        - name: TINKERBELL_PORT
+          value: "50061"
+        - name: DB_HOST
+          value: "postgres"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "tinkerbell"
+        - name: DB_USER
+          value: "tinkerbell"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tinkerbell-secrets
+              key: db-password
+        - name: DB_SSLMODE
+          value: "disable"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: LOG_FORMAT
+          value: "json"
+        - name: HARDWARE_DISCOVERY_INTERVAL
+          value: "30s"
+        - name: HARDWARE_TIMEOUT
+          value: "5m"
+        - name: WORKFLOW_TIMEOUT
+          value: "30m"
+        - name: WORKFLOW_RETRY_COUNT
+          value: "3"
+        - name: WORKFLOW_RETRY_INTERVAL
+          value: "1m"
+        - name: DHCP_PORT
+          value: "67"
+        - name: DHCP_INTERFACE
+          value: "eth0"
+        - name: TFTP_PORT
+          value: "69"
+        - name: TFTP_ROOT
+          value: "/var/lib/tinkerbell/tftp"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: tinkerbell-config
+          mountPath: /etc/tinkerbell/config.yaml
+          subPath: config.yaml
+        - name: tftp-storage
+          mountPath: /var/lib/tinkerbell/tftp
+        - name: tls-certs
+          mountPath: /etc/tinkerbell/tls
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 50061
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 50061
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: tinkerbell-config
+        configMap:
+          name: tinkerbell-config
+      - name: tftp-storage
+        persistentVolumeClaim:
+          claimName: tinkerbell-tftp-pvc
+      - name: tls-certs
+        secret:
+          secretName: tinkerbell-tls
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tinkerbell-tftp-pvc
+  namespace: tinkerbell
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinkerbell-service
+  namespace: tinkerbell
+spec:
+  selector:
+    app: tinkerbell-server
+  ports:
+  - name: api
+    protocol: TCP
+    port: 50061
+    targetPort: 50061
+  - name: dhcp
+    protocol: UDP
+    port: 67
+    targetPort: 67
+  - name: tftp
+    protocol: UDP
+    port: 69
+    targetPort: 69
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinkerbell-nodeport
+  namespace: tinkerbell
+spec:
+  selector:
+    app: tinkerbell-server
+  ports:
+  - name: api
+    protocol: TCP
+    port: 50061
+    targetPort: 50061
+    nodePort: 30061
+  - name: dhcp
+    protocol: UDP
+    port: 67
+    targetPort: 67
+    nodePort: 30067
+  - name: tftp
+    protocol: UDP
+    port: 69
+    targetPort: 69
+    nodePort: 30069
+  type: NodePort
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tinkerbell-ingress
+  namespace: tinkerbell
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  rules:
+  - host: tinkerbell.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tinkerbell-service
+            port:
+              number: 50061
+---
+# Tinkerbell CRD 定义
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hardwares.tinkerbell.org
+spec:
+  group: tinkerbell.org
+  names:
+    kind: Hardware
+    listKind: HardwareList
+    plural: hardwares
+    singular: hardware
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              metadata:
+                type: object
+                properties:
+                  facility:
+                    type: object
+                    properties:
+                      plan_slug:
+                        type: string
+                      plan_version_slug:
+                        type: string
+                      slug:
+                        type: string
+                required:
+                - facility
+              network:
+                type: object
+                properties:
+                  interfaces:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        dhcp:
+                          type: object
+                          properties:
+                            enabled:
+                              type: boolean
+                            hostname:
+                              type: string
+                            ip:
+                              type: object
+                              properties:
+                                address:
+                                  type: string
+                                family:
+                                  type: integer
+                                gateway:
+                                  type: string
+                                netmask:
+                                  type: string
+                        netboot:
+                          type: object
+                          properties:
+                            enabled:
+                              type: boolean
+                            ipxe_script_url:
+                              type: string
+                        name:
+                          type: string
+                required:
+                - interfaces
+            required:
+            - metadata
+            - network
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: templates.tinkerbell.org
+spec:
+  group: tinkerbell.org
+  names:
+    kind: Template
+    listKind: TemplateList
+    plural: templates
+    singular: template
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              data:
+                type: string
+              name:
+                type: string
+            required:
+            - data
+            - name
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workflows.tinkerbell.org
+spec:
+  group: tinkerbell.org
+  names:
+    kind: Workflow
+    listKind: WorkflowList
+    plural: workflows
+    singular: workflow
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              hardware_ref:
+                type: string
+              template_ref:
+                type: string
+            required:
+            - hardware_ref
+            - template_ref

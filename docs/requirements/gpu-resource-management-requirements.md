@@ -35,12 +35,23 @@
 ### 2.1 技术栈 (基于JD要求)
 - **主要语言**: Golang (核心微服务)
 - **辅助语言**: Python (工具开发)
-- **Web框架**: Echo 或 Fiber
+- **Web框架**: Echo v4.11.4 (MVP选定)
 - **硬件管理**: Tinkerbell (v0.12.2)
 - **数据存储**: PostgreSQL + Redis + InfluxDB
 - **消息队列**: NATS JetStream (MVP) / Kafka (生产环境)
 - **API接口**: REST (MVP) + gRPC/GraphQL (P1)
 - **测试框架**: Testcontainers-Go + k8s
+
+**框架选择说明**: 
+经过详细的技术选型分析，MVP阶段选定Echo v4.11.4作为Web框架。选择理由包括：
+- 性能优异：零内存分配路由，高并发处理能力
+- 功能完整：中间件系统强大，错误处理完善
+- 生态丰富：gRPC、GraphQL支持完善
+- 架构契合：完美支持事件驱动架构
+- 团队友好：与团队现有Gin经验兼容，学习成本低
+- 企业级特性：生产就绪，文档质量高，版本稳定
+
+详细分析请参考：`docs/analysis/echo-framework-selection-analysis.md`
 
 **消息队列选择说明**:
 - **NATS JetStream**: MVP阶段选择，部署简单，适合快速开发

@@ -426,7 +426,7 @@ sequenceDiagram
 
 #### **后端技术栈**
 - **主要语言**: Golang 1.21+
-- **Web框架**: Echo v4 (推荐) 或 Fiber v2
+- **Web框架**: Echo v4.11.4 (MVP选定)
 - **数据库**: PostgreSQL 15+
 - **缓存**: Redis 7+
 - **时序数据库**: InfluxDB 2.x
@@ -441,11 +441,15 @@ sequenceDiagram
 
 ### 5.2 技术选型理由
 
-#### **Golang + Echo**
-- **性能优秀**: 高并发处理能力
-- **生态丰富**: 完善的Web框架生态
-- **学习成本**: 团队已有Gin经验，Echo类似
-- **社区支持**: 活跃的社区和文档
+#### **Golang + Echo v4.11.4**
+- **性能优秀**: 零内存分配路由，高并发处理能力
+- **生态丰富**: gRPC、GraphQL支持完善，数据库集成良好
+- **学习成本**: 团队已有Gin经验，Echo API设计风格相似
+- **社区支持**: 活跃的社区和高质量文档
+- **企业级特性**: 生产就绪，版本稳定，安全更新及时
+- **架构契合**: 完美支持事件驱动架构和微服务架构
+
+**框架选择依据**: 经过详细的技术选型分析，Echo v4.11.4在性能、功能完整性、生态系统、企业级特性等方面均优于Gin和Fiber，最适合GPU资源管理系统的需求。详细分析请参考：`docs/analysis/echo-framework-selection-analysis.md`
 
 #### **Tinkerbell**
 - **功能匹配**: 专门解决裸金属provisioning

@@ -1,22 +1,24 @@
 package event
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
 
 // EventBus 事件总线接口
 type EventBus interface {
-	Publish(topic string, event interface{}) error
-	Subscribe(topic string, handler EventHandler) error
+	Publish(ctx context.Context, topic string, event interface{}) error
+	Subscribe(ctx context.Context, topic string, handler EventHandler) error
 	Close()
 }
 
 // EventHandler 事件处理器接口
-type EventHandler func(event []byte) error
+type EventHandler func(ctx context.Context, event []byte) error
 
 // NATSEventBus NATS事件总线实现
 type NATSEventBus struct {
@@ -36,19 +38,36 @@ func NewEventBus(natsURL string) EventBus {
 }
 
 // Publish 发布事件
-func (e *NATSEventBus) Publish(topic string, event interface{}) error {
+func (e *NATSEventBus) Publish(ctx context.Context, topic string, event interface{}) error {
+	// 检查Context是否已取消
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
 	}
 
-	return e.conn.Publish(topic, data)
+	// 使用Context控制发布超时
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return e.conn.Publish(topic, data)
+	}
 }
 
 // Subscribe 订阅事件
-func (e *NATSEventBus) Subscribe(topic string, handler EventHandler) error {
+func (e *NATSEventBus) Subscribe(ctx context.Context, topic string, handler EventHandler) error {
 	_, err := e.conn.Subscribe(topic, func(msg *nats.Msg) {
-		if err := handler(msg.Data); err != nil {
+		// 为每个消息创建Context
+		msgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		if err := handler(msgCtx, msg.Data); err != nil {
 			log.Printf("Error handling event on topic %s: %v", topic, err)
 		}
 	})
@@ -82,16 +101,16 @@ type HardwareEvent struct {
 // AlertEvent 告警事件
 type AlertEvent struct {
 	Event
-	AlertID   string `json:"alert_id"`
-	Severity  string `json:"severity"`
-	Message   string `json:"message"`
+	AlertID  string `json:"alert_id"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
 }
 
 // EventType 事件类型常量
 const (
-	EventTypeHardwareDiscovered = "hardware.discovered"
+	EventTypeHardwareDiscovered  = "hardware.discovered"
 	EventTypeHardwareProvisioned = "hardware.provisioned"
-	EventTypeHardwareFailed = "hardware.failed"
-	EventTypeAlertRaised = "alert.raised"
-	EventTypeAlertResolved = "alert.resolved"
+	EventTypeHardwareFailed      = "hardware.failed"
+	EventTypeAlertRaised         = "alert.raised"
+	EventTypeAlertResolved       = "alert.resolved"
 )

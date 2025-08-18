@@ -7,7 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"palebluedot-backend/internal/services/event"
+	"gpu-management/internal/services/event"
 )
 
 // AllocationHandler 分配处理器

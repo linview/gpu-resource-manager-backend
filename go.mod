@@ -1,4 +1,4 @@
-module palebluedot-backend
+module gpu-management
 
 go 1.21
 

@@ -7,9 +7,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"palebluedot-backend/internal/api/middleware"
-	"palebluedot-backend/internal/models"
-	"palebluedot-backend/internal/services/event"
+	"gpu-management/internal/api/middleware"
+	"gpu-management/internal/models"
+	"gpu-management/internal/services/event"
 )
 
 // GPUHandler GPU处理器

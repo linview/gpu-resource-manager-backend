@@ -6,8 +6,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"palebluedot-backend/internal/api/handlers"
-	"palebluedot-backend/internal/services/event"
+	"gpu-management/internal/api/handlers"
+	"gpu-management/internal/services/event"
 )
 
 // Setup 设置路由
@@ -81,11 +81,11 @@ func Setup(e *echo.Echo, eventBus event.EventBus) {
 	alerts.POST("", eventHandler.CreateAlert)
 	alerts.PUT("/:id", eventHandler.UpdateAlert)
 	alerts.GET("/:id/correlation", eventHandler.GetAlertCorrelation)
-	
+
 	// 健康检查
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]interface{}{
-			"status": "healthy",
+			"status":    "healthy",
 			"timestamp": time.Now().Unix(),
 		})
 	})
